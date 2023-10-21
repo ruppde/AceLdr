@@ -5,9 +5,11 @@ OUT         := bin
 CFLAGS      := $(CFLAGS) -Os -fno-asynchronous-unwind-tables -nostdlib 
 CFLAGS      := $(CFLAGS) -fno-ident -fpack-struct=8 -falign-functions=1
 CFLAGS      := $(CFLAGS) -s -ffunction-sections -falign-jumps=1 -Wall
-CFLAGS      := $(CFLAGS) -Werror -falign-labels=1 -fPIC -Wno-array-bounds
+CFLAGS      := $(CFLAGS) -falign-labels=1 -fPIC -Wno-array-bounds
 LFLAGS      := $(LFLAGS) -Wl,-s,--no-seh,--enable-stdcall-fixup
 LFLAGS 		:= $(LFLAGS) -Wl,--image-base=0,-Tsrc/link.ld
+
+#CLFAGS 	 := $(CLFAGS) -Werror
 
 
 default: clean aceldr

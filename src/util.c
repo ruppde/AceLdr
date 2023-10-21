@@ -70,6 +70,12 @@ SECTION( E ) PVOID FindModule( ULONG hash, PPEB peb, PULONG size )
     PLIST_ENTRY             Ent = NULL;
     PLDR_DATA_TABLE_ENTRY   Ldr = NULL;
 
+    // If no peb ptr supplied, just grab our own
+    if ( peb == NULL)
+    {
+        peb = NtCurrentTeb()->ProcessEnvironmentBlock;
+    }
+
     Hdr = & peb->Ldr->InLoadOrderModuleList;
     Ent = Hdr->Flink;
 
@@ -264,3 +270,193 @@ SECTION( E ) PVOID FindGadget( LPBYTE module, ULONG size )
 
     return NULL;
 };
+
+SECTION( E ) PRUNTIME_FUNCTION GetRuntimeFunction( PVOID Address, PDWORD64 ImageBase )
+{
+    // Walk the PEB Modules, try to find the module that function falls within
+    PLIST_ENTRY pModule      = ( ( PPEB ) NtCurrentTeb()->ProcessEnvironmentBlock )->Ldr->InLoadOrderModuleList.Flink;
+	PLIST_ENTRY pFirstModule = pModule;
+	do
+	{
+
+        // Get Size of DLL;
+        PVOID                 Base          = NULL;
+        PIMAGE_NT_HEADERS     NtHeaders     = NULL;
+        PIMAGE_SECTION_HEADER SecHeader     = NULL;
+        DWORD                 TextSize      = NULL;
+        PVOID                 LowerBound    = NULL;
+        PVOID                 UpperBound    = NULL;
+        
+        Base            = (( PLDR_DATA_TABLE_ENTRY ) pModule )->DllBase;
+        if ( Base )
+        {
+            if ( *( PWORD )( Base ) == 0x5A4D )
+            {
+                
+                NtHeaders		= (PVOID) ( Base + ( ( PIMAGE_DOS_HEADER ) Base )->e_lfanew );
+                
+                if ( *( PWORD )NtHeaders == 0x4550 )
+                {
+                    if ( NtHeaders->FileHeader.Characteristics & 0x2000 )
+                    {
+
+                        SecHeader 		= IMAGE_FIRST_SECTION( NtHeaders );
+
+                        for ( int i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++ )
+                        {
+                            if ( HashString( SecHeader[ i ].Name, 0 ) ==  H_SECTION_PDATA )
+                            {
+                                LowerBound      = (PBYTE) Base + SecHeader[ i ].VirtualAddress;
+                                UpperBound      = (PBYTE) LowerBound + SecHeader[ i ].Misc.VirtualSize;
+                            }
+                        }
+
+                        if ( LowerBound && UpperBound )
+                        {
+                            // Let's find the PRUNTIME_FUNCTION in the pdata
+                            PVOID RelativeAddress  =  Address - Base;
+
+                            for ( PRUNTIME_FUNCTION p = LowerBound; p < UpperBound ; p++ )
+                            {
+                                if ( RelativeAddress >= p->BeginAddress && RelativeAddress <= p->EndAddress )
+                                {
+                                    *ImageBase = Base;
+                                    return p;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        pModule =  pModule->Flink;
+	
+    } while ( pModule && pModule != pFirstModule );
+
+    return NULL;
+}
+
+/* Credit to VulcanRaven project for the original implementation of these two*/
+SECTION( E ) ULONG CalculateFunctionStackSize( PRUNTIME_FUNCTION pRuntimeFunction, DWORD64 ImageBase )
+{
+    #define RBP_OP_INFO 0x5
+    #define true 1
+
+    NTSTATUS status = STATUS_SUCCESS;
+    PUNWIND_INFO pUnwindInfo = NULL;
+    ULONG unwindOperation = 0;
+    ULONG operationInfo = 0;
+    ULONG index = 0;
+    ULONG frameOffset = 0;
+    StackFrame stackFrame = { 0 };
+
+    if (!pRuntimeFunction)
+    {
+        status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+
+    pUnwindInfo = (PUNWIND_INFO)(pRuntimeFunction->UnwindData + ImageBase);
+    while (index < pUnwindInfo->CountOfCodes)
+    {
+        unwindOperation = pUnwindInfo->UnwindCode[index].UnwindOp;
+        operationInfo = pUnwindInfo->UnwindCode[index].OpInfo;
+        switch (unwindOperation) {
+        case UWOP_PUSH_NONVOL:
+            stackFrame.totalStackSize += 8;
+            if (RBP_OP_INFO == operationInfo)
+            {
+                stackFrame.pushRbp = true;
+                stackFrame.countOfCodes = pUnwindInfo->CountOfCodes;
+                stackFrame.pushRbpIndex = index + 1;
+            }
+            break;
+        case UWOP_SAVE_NONVOL:
+            index += 1;
+            break;
+        case UWOP_ALLOC_SMALL:
+            stackFrame.totalStackSize += ((operationInfo * 8) + 8);
+            break;
+        case UWOP_ALLOC_LARGE:
+            index += 1;
+            frameOffset = pUnwindInfo->UnwindCode[index].FrameOffset;
+            if (operationInfo == 0)
+            {
+                frameOffset *= 8;
+            }
+            else
+            {
+                index += 1;
+                frameOffset += (pUnwindInfo->UnwindCode[index].FrameOffset << 16);
+            }
+            stackFrame.totalStackSize += frameOffset;
+            break;
+        case UWOP_SET_FPREG:
+            stackFrame.setsFramePointer = true;
+            break;
+        default:
+            status = STATUS_ASSERTION_FAILURE;
+            break;
+        }
+
+        index += 1;
+    }
+
+    if (0 != (pUnwindInfo->Flags & UNW_FLAG_CHAININFO))
+    {
+        index = pUnwindInfo->CountOfCodes;
+        if (0 != (index & 1))
+        {
+            index += 1;
+        }
+        pRuntimeFunction = (PRUNTIME_FUNCTION)(&pUnwindInfo->UnwindCode[index]);
+        return CalculateFunctionStackSize(pRuntimeFunction, ImageBase);
+    }
+
+    stackFrame.totalStackSize += 8;
+
+    return stackFrame.totalStackSize;
+	Cleanup:
+		return status;
+}
+
+SECTION( E ) ULONG CalculateFunctionStackSizeWrapper( PVOID ReturnAddress )
+{
+    NTSTATUS status = STATUS_SUCCESS;
+    PRUNTIME_FUNCTION pRuntimeFunction = NULL;
+    DWORD64 ImageBase = 0;
+    PUNWIND_HISTORY_TABLE pHistoryTable = NULL;
+    if (!ReturnAddress)
+    {
+        status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+
+    pRuntimeFunction = GetRuntimeFunction( ReturnAddress, &ImageBase );
+    if (NULL == pRuntimeFunction)
+    {
+        status = STATUS_ASSERTION_FAILURE;
+        goto Cleanup;
+    }
+    
+    ULONG StackSize = CalculateFunctionStackSize( pRuntimeFunction, ImageBase );
+    return StackSize;
+
+	Cleanup:
+		return status;
+}
+
+SECTION( E ) VOID PrepSpoof( PPRM Param, PVOID Module, DWORD Size )
+{
+	Param->trampoline 		= FindGadget( Module, Size );
+	Param->Gadget_ss		= CalculateFunctionStackSizeWrapper( Param->trampoline );
+
+	Param->RUTS_retaddr 	= ( PBYTE ) FindFunction( FindModule( H_LIB_NTDLL, NULL, NULL ), H_API_RTLUSERTHREADSTART ) + 0x21 ;
+	Param->RUTS_ss			= CalculateFunctionStackSizeWrapper( Param->RUTS_retaddr );
+
+	Param->BTIT_retaddr		= ( PBYTE ) FindFunction( FindModule( H_LIB_KERNEL32, NULL, NULL ), H_API_BASETHREADINITTHUNK ) + 0x14 ; 
+	Param->BTIT_ss			= CalculateFunctionStackSizeWrapper( Param->BTIT_retaddr );
+
+	Param->Fixup			= OFFSET( Fixup );
+	return;
+} 

