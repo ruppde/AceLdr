@@ -46,13 +46,9 @@ typedef struct __attribute__(( packed ))
     ULONG_PTR Region;
     ULONG_PTR Size;
     HANDLE    Heap;
+    ULONG_PTR ExecRegionSize;
 } STUB, *PSTUB ;
 
-// typedef struct {
-//     const void* trampoline;     // always JMP RBX
-//     void* function;             // Target Function
-//     void* rbx;                  // Placeholder
-// } PRM, *PPRM;
 typedef struct
 {
     PVOID       Fixup;             // 0

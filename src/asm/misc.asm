@@ -10,6 +10,7 @@ Stub:
     dq    0
     dq    0
     dq    0
+    dq    0
 
 
 [SECTION .text$F]

