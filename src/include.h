@@ -47,6 +47,8 @@ typedef struct __attribute__(( packed ))
     ULONG_PTR Size;
     HANDLE    Heap;
     ULONG_PTR ExecRegionSize;
+    ULONG_PTR OriginalText;
+    ULONG_PTR OriginalPayload;
 } STUB, *PSTUB ;
 
 typedef struct

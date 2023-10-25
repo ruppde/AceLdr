@@ -9,6 +9,7 @@ CFLAGS      := $(CFLAGS) -falign-labels=1 -fPIC -Wno-array-bounds
 LFLAGS      := $(LFLAGS) -Wl,-s,--no-seh,--enable-stdcall-fixup
 LFLAGS 		:= $(LFLAGS) -Wl,--image-base=0,-Tsrc/link.ld
 
+CFLAGS      := $(CFLAGS) -w
 #CLFAGS 	 := $(CLFAGS) -Werror
 
 

