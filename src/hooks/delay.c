@@ -559,7 +559,6 @@ SECTION( D ) VOID Sleep_Hook( DWORD dwMilliseconds )
         };
 
         encryptHeap( &Api );
-        __debugbreak();
         delayExec( &Api );
         encryptHeap( &Api );
     };
